@@ -521,20 +521,38 @@ int ECC_BAF_Verify(int start_j, int l, const char *D[], const size_t Dlen[], int
         //9: rrec[j] ←(u[j] −krec[j]) mod n
         BN_mod_sub(rrec[j], u[j], krec[j], ecc_ctx->order, ecc_ctx->bn_ctx);
     }
-//Compute RHS
+//11 - Compute RHS
     //12: RHS ←O {Point at infinity}
     EC_POINT *RHS = EC_POINT_new(ecc_ctx->group);
     EC_POINT_set_to_infinity(ecc_ctx->group, RHS);
 
     //14: hj ←H(Dj∥rrec[j]∥j) mod 
     BIGNUM *hj = BN_new();
+    //BIGNUM *temp = BN_new();
+
     for (int j=0; j <= l; j++) {
         //convert j via be64 to match ECC_BAF_Sign()
         unsigned char j_buf[8];
         be64((uint64_t)j, j_buf);
-        size_t h_buf = Dlen[j] + BN_n_bytes(rrec[j]) + 8; //+8 for j_buf
+        size_t hj_len = Dlen[j] + BN_num_bytes(rrec[j]) + 8; //+8 for j_buf
+        unsigned char *hj_buf = malloc(hj_len);
+        memcpy(hj_buf, D[j], Dlen[j]);
+        //memcpy(hj_buf + Dlen[j], rrec[j], BN_num_bytes(rrec[j]));
+        BN_bn2bin(rrec[j], hj_buf + Dlen[j]);
+        memcpy(hj_buf + Dlen[j] + BN_num_bytes(rrec[j]), j_buf, 8);
+        BN_hash_to_Zn(hj_buf, hj_len, ecc_ctx->order, hj, ecc_ctx->bn_ctx); 
+        free(hj_buf);
         
+        //15: temp ←[hj]A[j] + B[j]
+        EC_POINT *temp = EC_POINT_new(ecc_ctx->group);
+        EC_POINT_mul(ecc_ctx->group, temp, NULL, A[j], hj, ecc_ctx->bn_ctx);
+        EC_POINT_add(ecc_ctx->group, temp, temp, B[j], ecc_ctx->bn_ctx);
+
+        //16: RHS ←RHS + temp
+        EC_POINT_add(ecc_ctx->group, RHS, RHS, temp, ecc_ctx->bn_ctx);
+        EC_POINT_free(temp);
     }
+
 
   //======Save reconstructed_k.txt and reconstructed_r.txt======//
   //===================DO NOT ALTER THIS CODE===================//
@@ -560,4 +578,27 @@ int ECC_BAF_Verify(int start_j, int l, const char *D[], const size_t Dlen[], int
     Compute LHS and RHS and compare them.
     Return 1 if they are equal, 0 otherwise.
 =============================================*/
+
+        //19: LHS ←[σ]G
+        EC_POINT *LHS = EC_POINT_new(ecc_ctx->group);
+        EC_POINT_mul(ecc_ctx->group, LHS, s_0l, NULL, NULL, ecc_ctx->bn_ctx);
+
+        //20. Verify LHS = RHS then return Accept, else reject
+        //FILE *verify_file = fopen("verify_result.txt", "w");
+        //if (EC_POINT_cmp(ecc_ctx->group, LHS, RHS, ecc_ctx->bn_ctx) == 0) 
+         //   fprintf(verify_file, "VALID");
+        //else fprintf(verify_file, "INVALID");
+        //fclose(verify_file);
+        int valid = (EC_POINT_cmp(ecc_ctx->group, LHS, RHS, ecc_ctx->bn_ctx) == 0);
+
+        BN_free(Hkj);
+        BN_free(hj);
+        for (int j = 0; j <= l; j++) {
+            BN_free(krec[j]);
+            BN_free(rrec[j]);
+        }
+        EC_POINT_free(RHS);
+        EC_POINT_free(LHS);
+
+        return valid;
 }
